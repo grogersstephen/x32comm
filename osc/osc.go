@@ -1,26 +1,37 @@
 package osc
 
 import (
+	"context"
 	"encoding/binary"
-	"fmt"
 	"math"
 	"net"
-	"os"
-	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
+
+type Debugger interface {
+	Debug(msg string, args ...any)
+}
 
 type OSC struct {
 	Destination *net.UDPAddr
 	Client      *net.UDPAddr
 	Conn        *net.UDPConn
+	Debugger    Debugger
 }
 
-func (osc *OSC) Dial() error {
-	var err error
-	fmt.Fprintf(os.Stderr, "osc.Destination: %v:%v\n", osc.Destination.IP, osc.Destination.Port)
+func (osc *OSC) Debug(msg string, args ...any) {
+	if osc.Debugger != nil {
+		osc.Debugger.Debug(msg, args...)
+	}
+}
+
+func (osc *OSC) Dial() (err error) {
 	osc.Conn, err = net.DialUDP("udp", osc.Client, osc.Destination)
-	fmt.Fprintf(os.Stderr, "osc.Conn local addr: %s\n", osc.Conn.LocalAddr().String())
+	osc.Debug("osc.Destination", "host", osc.Destination.IP, "port", osc.Destination.Port)
+	osc.Debug("osc.Conn", "local", osc.Conn.LocalAddr().String())
+
 	return err
 }
 
@@ -50,41 +61,43 @@ func (osc *OSC) Send(msg Message) error {
 	return err
 }
 
-func (osc *OSC) Receive(wait time.Duration) (Message, error) {
+func (osc *OSC) Receive(ctx context.Context, wait time.Duration) (Message, error) {
 	// Waits for and reads a message from Conn from net.DialUDP
-	//    wait is wait time in milliseconds
+	// wait is wait time in milliseconds
 	var (
 		msg Message
-		err error
-		wg  sync.WaitGroup
 	)
+
+	ctx, done := context.WithTimeout(ctx, wait)
+
+	// the ctx here will be use for later
+	var eg *errgroup.Group
+	eg, ctx = errgroup.WithContext(ctx)
+	defer done()
+	_ = ctx
 
 	byt := make([]byte, 8192)
 
-	fmt.Fprintf(os.Stderr, "Waiting for Reply...\n")
-	wg.Add(1) // Add one count to waitgroup
-	go func(w time.Duration, e *error) {
-		// If 5 seconds pass, print to stderr, and close waitgroup
-		time.Sleep(w)
-		*e = fmt.Errorf("Couldn't receive a response")
-		wg.Done()
-	}(wait, &err)
-	go func(e *error) {
+	osc.Debug("Waiting for Reply...")
+
+	eg.Go(func() error {
 		// Read into msg.Packet
-		//_, *e = osc.Conn.Read(msg.Packet.Bytes())
-		_, *e = osc.Conn.Read(byt)
-		wg.Done() // If read is successful, close waitgroup
-	}(&err)
-	wg.Wait()
-	wg.Add(1) // Add to the counter to guard against panicking at a negative counter
+		if _, err := osc.Conn.Read(byt); err != nil {
+			return err
+		}
+		return nil
+	})
 
-	msg.Packet.Write(byt)
+	if _, err := msg.Packet.Write(byt); err != nil {
+		return msg, err
+	}
 
-	return msg, err
+	return msg, eg.Wait()
 }
 
-func (osc *OSC) Listen(wait time.Duration) (Message, error) {
-	msg, err := osc.Receive(wait)
+func (osc *OSC) Listen(ctx context.Context, wait time.Duration) (Message, error) {
+
+	msg, err := osc.Receive(ctx, wait)
 	if err != nil {
 		return msg, err
 	}

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -9,13 +11,15 @@ import (
 	"strconv"
 	"time"
 
+	"log/slog"
+
 	"github.com/grogersstephen/x32comm/osc"
 	"github.com/urfave/cli/v2"
 )
 
 const (
 	// UPDATE: X32 faders apparently only have 10bit resolution
-	FADER_RESOLUTION float32 = 1024 // 10bit
+	FADER_RESOLUTION float32 = 1 << 10 // 10bit
 	//FADER_RESOLUTION float32 = 256 // 8bit
 )
 
@@ -24,18 +28,27 @@ type x32 struct {
 }
 
 func main() {
+
+	logr := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	var err error
-	var x x32
+	x := x32{
+		OSC: osc.OSC{
+			Debugger: logr.With("entity", "osc"),
+		},
+	}
 
 	x.Destination, err = net.ResolveUDPAddr("udp", "45.56.112.149:10023")
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	logr.Info(x.Destination.String())
+
 	// Cannot use localhost or 127.0.0.1
 	x.Client, err = net.ResolveUDPAddr("udp", ":10024")
-	//	x.Client, err = net.ResolveUDPAddr("udp", "127.0.0.1:10024")
-	//x.Client, err = net.ResolveUDPAddr("udp", "192.168.0.173:10024")
-	//x.Client, err = net.ResolveUDPAddr("udp", "192.168.213.55:10024")
+	// x.Client, err = net.ResolveUDPAddr("udp", "127.0.0.1:10024")
+	// x.Client, err = net.ResolveUDPAddr("udp", "192.168.0.173:10024")
+	// x.Client, err = net.ResolveUDPAddr("udp", "192.168.213.55:10024")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -86,18 +99,18 @@ func main() {
 					channelS := cCtx.Args().Get(0)
 					levelS := cCtx.Args().Get(1)
 					if channelS == "" {
-						return fmt.Errorf("please select a channel 1-32")
+						return errors.New("please select a channel 1-32")
 					}
 					if levelS == "" {
-						return fmt.Errorf("please select a level 0-100")
+						return errors.New("please select a level 0-100")
 					}
 					channelI, err := strconv.Atoi(channelS)
 					if err != nil {
-						return fmt.Errorf("please select a channel 1-32")
+						return errors.New("please select a channel 1-32")
 					}
 					levelI, err := strconv.ParseFloat(levelS, 32)
 					if err != nil {
-						return fmt.Errorf("please select a level 0-100")
+						return errors.New("please select a level 0-100")
 					}
 					levelF := float32(levelI) / float32(100)
 					err = x.setChFader(channelI, levelF)
@@ -147,7 +160,7 @@ func main() {
 				Name:  "listen",
 				Usage: "listen for a message",
 				Action: func(cCtx *cli.Context) error {
-					out, err := x.listen(9 * time.Second)
+					out, err := x.listen(cCtx.Context, 9*time.Second)
 					if err != nil {
 						return err
 					}
@@ -244,8 +257,8 @@ func main() {
 
 }
 
-func (x *x32) listen(wait time.Duration) (any, error) {
-	msg, err := x.Listen(wait)
+func (x *x32) listen(ctx context.Context, wait time.Duration) (any, error) {
+	msg, err := x.Listen(ctx, wait)
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +271,7 @@ func (x *x32) listen(wait time.Duration) (any, error) {
 	case 'f':
 		return msg.Args[0].Float32(), nil
 	}
-	return nil, fmt.Errorf("cannot determine data type:")
+	return nil, errors.New("cannot determine data type")
 }
 
 func (x *x32) sendAndListen(message string, wait time.Duration) (any, error) {
@@ -266,12 +279,12 @@ func (x *x32) sendAndListen(message string, wait time.Duration) (any, error) {
 	if err != nil {
 		return "", err
 	}
-	out, err := x.listen(wait)
+	out, err := x.listen(context.Background(), wait)
 	return out, err
 }
 
 func (x *x32) getChFader(ch int) (float32, error) {
-	chS := fmt.Sprintf("%d", ch)
+	chS := fmt.Sprintf("%02d", ch)
 	if ch < 10 {
 		chS = "0" + chS
 	}
@@ -281,8 +294,8 @@ func (x *x32) getChFader(ch int) (float32, error) {
 		return 0, err
 	}
 	fader, ok := out.(float32)
-	if ok != true {
-		return 0, fmt.Errorf("not a float")
+	if !ok {
+		return 0, errors.New("not a float")
 	}
 	return fader, nil
 }

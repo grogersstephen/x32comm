@@ -3,7 +3,7 @@ package osc
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
+	"errors"
 	"math"
 	"strings"
 )
@@ -11,10 +11,11 @@ import (
 type data []byte
 
 type Message struct {
-	Packet bytes.Buffer
-	Addr   string
-	Tags   string
-	Args   []data
+	Packet   bytes.Buffer
+	Addr     string
+	Tags     string
+	Args     []data
+	debugger Debugger
 }
 
 func (d *data) Int32() int32 {
@@ -64,9 +65,17 @@ func addZeros(b *[]byte) {
 
 func (osc *OSC) NewMessage(addr string) *Message {
 	msg := &Message{
-		Addr: addr,
+		Addr:     addr,
+		debugger: osc.Debugger,
 	}
+
 	return msg
+}
+
+func (msg *Message) Debug(m string, args ...any) {
+	if msg.debugger != nil {
+		msg.debugger.Debug(m, args...)
+	}
 }
 
 func (msg *Message) MakePacket() error {
@@ -80,7 +89,7 @@ func (msg *Message) MakePacket() error {
 		return err
 	}
 	if n == 0 {
-		return fmt.Errorf("Could not write AddrBytes")
+		return errors.New("could not write AddrBytes")
 	}
 
 	// Get the tags in bytes, prefix with comma, and pad with zeros
@@ -91,7 +100,7 @@ func (msg *Message) MakePacket() error {
 		return err
 	}
 	if n == 0 {
-		return fmt.Errorf("Could not write TagBytes")
+		return errors.New("could not write TagBytes")
 	}
 
 	// The msg.Args is already padded with proper count of zeros
@@ -101,7 +110,7 @@ func (msg *Message) MakePacket() error {
 			return err
 		}
 		if n == 0 {
-			return fmt.Errorf("Could not write ArgBytes")
+			return errors.New("could not write ArgBytes")
 		}
 	}
 
@@ -109,21 +118,21 @@ func (msg *Message) MakePacket() error {
 }
 
 func (msg *Message) Add(l any) error {
-	switch fmt.Sprintf("%T", l) {
-	case "int":
-		msg.AddInt(int32(l.(int)))
-	case "int32":
-		msg.AddInt(l.(int32))
-	case "int64":
-		msg.AddInt(int32(l.(int64)))
-	case "float32":
-		msg.AddFloat(l.(float32))
-	case "float64":
-		msg.AddFloat(float32(l.(float64)))
-	case "string":
-		msg.AddString(l.(string))
+	switch v := l.(type) {
+	case int:
+		msg.AddInt(int32(v))
+	case int32:
+		msg.AddInt(v)
+	case int64:
+		msg.AddInt(int32(v))
+	case float32:
+		msg.AddFloat(v)
+	case float64:
+		msg.AddFloat(float32(v))
+	case string:
+		msg.AddString(v)
 	default:
-		return fmt.Errorf("Cannot determine type of argument")
+		return errors.New("cannot determine type of argument")
 	}
 	return nil
 }
@@ -171,7 +180,7 @@ func (msg *Message) ParseMessage() error {
 
 	// If there is no data in the packet bytes buffer, return err
 	if msg.Packet.Len() == 0 {
-		err = fmt.Errorf("Received Empty Packet")
+		err = errors.New("received empty packet")
 		return err
 	}
 
@@ -196,11 +205,11 @@ func (msg *Message) ParseMessage() error {
 	//     to make the tag portion of a length divisible by 4
 	//     If already divisible by 4, there will be 4 null bytes
 	if err != nil {
-		return fmt.Errorf("No null byte following tags")
+		return errors.New("no null byte following tags")
 	}
 
 	// Trim off the zero byte we just wrote to msg.Tags
-	msg.Tags = strings.TrimSuffix(msg.Tags, string(0))
+	msg.Tags = strings.TrimSuffix(msg.Tags, "0")
 	// Unread that zero byte
 	msg.Packet.UnreadByte()
 
@@ -211,7 +220,7 @@ func (msg *Message) ParseMessage() error {
 
 	// If we're out of bounds, exit
 	if msg.Packet.Len() == 0 {
-		return fmt.Errorf("Out of bounds")
+		return errors.New("out of bounds")
 	}
 
 	// We'll make as many iterations as we have tags
@@ -221,6 +230,9 @@ func (msg *Message) ParseMessage() error {
 		if tag == 's' {
 			// Read until hit a zero byte
 			msg.Args[tagIndex], err = msg.Packet.ReadBytes(0)
+			if err != nil {
+				return err
+			}
 			// Trim off the zero byte just written
 			msg.Args[tagIndex] = bytes.TrimSuffix(msg.Args[tagIndex], []byte{0})
 			msg.Packet.UnreadByte() // Unread that zero byte
@@ -234,22 +246,23 @@ func (msg *Message) ParseMessage() error {
 				return err
 			}
 			if n != 4 {
-				return fmt.Errorf("Didn't read all 32 bits")
+				return errors.New("didn't read all 32 bits")
 			}
 			msg.Args[tagIndex] = ibuf
 		}
 		if tag == 'b' {
-			err = fmt.Errorf(
-				"Contains a blob\nNot yet sure how to parse")
+			err = errors.New(
+				"dontains a blob\nNot yet sure how to parse")
 			return err
 		}
 	}
 
 	// If there are still nonzero bytes left
 	var byt byte
-	for err = nil; err == nil; byt, err = msg.Packet.ReadByte() {
+	for byt, err = msg.Packet.ReadByte(); err != nil; {
+		// this err doesn't do anything
 		if byt != 0 {
-			err = fmt.Errorf("More data than expected")
+			return errors.New("more data than expected")
 		}
 	}
 
