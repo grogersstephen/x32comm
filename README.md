@@ -2,6 +2,7 @@
 
 X32comm is a utility to communicate with the Behringer X32 Audio Mixing Console via OSC messages.
 
+*References*
 [The OSC Specification](https://opensoundcontrol.stanford.edu/spec-1_0.html) by [Matthew Wright](https://github.com/matthewjameswright), one of the developers of OSC.
 
 [UNOFFICIAL X32/M32 OSC REMOTE PROTOCOL](https://tostibroeders.nl/wp-content/uploads/2020/02/X32-OSC.pdf) by [Patrick-Gilles Maillot](https://github.com/pmaillot/)
