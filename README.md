@@ -1,4 +1,4 @@
-### x32comm
+## x32comm
 
 X32comm is a utility to communicate with the Behringer X32 Audio Mixing Console via OSC messages.
 
@@ -21,25 +21,25 @@ Local Port
 
 ## Usage
 
-# Send a custom message with a float32 value
+### Send a custom message with a float32 value
 Send message "/ch/01/mix/fader" with float32 value ".5"
 ```
 x32comm set --message /ch/01/mix/fader --float .5
 ```
 
-# Send a custom message, and listen for a response message
+### Send a custom message, and listen for a response message
 Send message "/ch/01/mix/fader"
 ```
 x32comm get --message /ch/01/mix/fader
 ```
 
-# Get the value of a channel fader
+### Get the value of a channel fader
 Get the level of channel 5
 ```
 x32comm getChFader 5
 ```
 
-# Set the value of a channel fader in percentage
+### Set the value of a channel fader in percentage
 The percentage corresponds to the fader's physical position
 Set channel 5 to 100% (+10dB)
 ```
