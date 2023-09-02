@@ -8,7 +8,7 @@ X32comm is a utility to communicate with the Behringer X32 Audio Mixing Console 
 
 ## Installation
 
-If Go is already installed:
+If Go is installed:
 ```
 go install github.com/grogersstephen/x32comm@latest
 ```
@@ -28,19 +28,19 @@ x32comm set --message /ch/01/mix/fader --float .5
 ```
 
 ### Send a custom message, and listen for a response message
-Send message "/ch/01/mix/fader"
+Send message "/ch/01/mix/fader", and receive a responding message
 ```
 x32comm get --message /ch/01/mix/fader
 ```
 
 ### Get the value of a channel fader
-Get the level of channel 5
+Get the fader level of channel 5
 ```
 x32comm getChFader 5
 ```
 
 ### Set the value of a channel fader in percentage
-The percentage corresponds to the fader's physical position
+The percentage corresponds to the fader's physical position\n
 Set channel 5 to 100% (+10dB)
 ```
 x32comm getChFader 5 100
