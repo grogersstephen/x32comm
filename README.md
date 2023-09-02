@@ -43,5 +43,5 @@ x32comm getChFader 5
 The percentage corresponds to the fader's physical position\n
 Set channel 5 to 100% (+10dB)
 ```
-x32comm getChFader 5 100
+x32comm setChFader 5 100
 ```
