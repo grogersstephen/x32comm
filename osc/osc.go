@@ -8,8 +8,11 @@ import (
 	"io"
 	"math"
 	"net"
+	"os"
+	"path/filepath"
 	"time"
 
+	"github.com/grogersstephen/x32comm/internal/conman"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -34,7 +37,26 @@ func (osc *OSC) Dial() error {
 	conn, err := net.DialUDP("udp", osc.Client, osc.Destination)
 	osc.Debug("osc.Destination", "host", osc.Destination.IP, "port", osc.Destination.Port)
 	osc.Debug("osc.Conn", "local", conn.LocalAddr().String())
-	osc.Conn = conn
+
+	if err != nil {
+		return err
+	}
+
+	tmp := os.TempDir()
+	ts := time.Now()
+	fp := filepath.Join(tmp, fmt.Sprintf("x32_conman_%d.txt", ts.Unix()))
+	if err := os.Mkdir(fp, 0750); err != nil {
+		return fmt.Errorf("mkdir; %s: %w", fp, err)
+	}
+
+	cm, err := conman.NewConman(conman.WithRef(conn), conman.WithStructuredDrains(fp))
+	if err != nil {
+		return fmt.Errorf("new conman: %w", err)
+	}
+
+	osc.Debug("copied reads and writes", "fp", fp)
+
+	osc.Conn = cm
 	return err
 }
 

@@ -16,6 +16,13 @@ type applyOptionFunc func(c *ConMan) error
 func (f applyOptionFunc) apply(c *ConMan) error {
 	return f(c)
 }
+func WithRef(ref io.ReadWriteCloser) Option {
+	return applyOptionFunc(func(c *ConMan) error {
+
+		c.ref = ref
+		return nil
+	})
+}
 
 func WithDrainPath(drainPath string) Option {
 	return applyOptionFunc(func(c *ConMan) error {
