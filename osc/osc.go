@@ -3,6 +3,9 @@ package osc
 import (
 	"context"
 	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
 	"math"
 	"net"
 	"time"
@@ -17,7 +20,7 @@ type Debugger interface {
 type OSC struct {
 	Destination *net.UDPAddr
 	Client      *net.UDPAddr
-	Conn        *net.UDPConn
+	Conn        io.ReadWriteCloser
 	Debugger    Debugger
 }
 
@@ -27,11 +30,11 @@ func (osc *OSC) Debug(msg string, args ...any) {
 	}
 }
 
-func (osc *OSC) Dial() (err error) {
-	osc.Conn, err = net.DialUDP("udp", osc.Client, osc.Destination)
+func (osc *OSC) Dial() error {
+	conn, err := net.DialUDP("udp", osc.Client, osc.Destination)
 	osc.Debug("osc.Destination", "host", osc.Destination.IP, "port", osc.Destination.Port)
-	osc.Debug("osc.Conn", "local", osc.Conn.LocalAddr().String())
-
+	osc.Debug("osc.Conn", "local", conn.LocalAddr().String())
+	osc.Conn = conn
 	return err
 }
 
@@ -46,18 +49,24 @@ func (osc *OSC) SendString(s string) error {
 	}
 	// Write the bytes to the connection
 	_, err := osc.Conn.Write(byt)
-	return err
-}
-
-func (osc *OSC) Send(msg Message) error {
-	if msg.Packet.Len() == 0 {
-		err := msg.MakePacket()
-		if err != nil {
+	if err != nil {
+		if !errors.Is(err, io.EOF) {
 			return err
 		}
 	}
+	return nil
+}
+
+func (osc *OSC) Send(msg interface {
+	MakePacket() ([]byte, error)
+}) error {
+	b, err := msg.MakePacket()
+	if err != nil {
+		return err
+	}
+
 	// Sends a message using the Conn from net.DialUDP
-	_, err := osc.Conn.Write(msg.Packet.Bytes())
+	_, err = osc.Conn.Write(b)
 	return err
 }
 
@@ -68,15 +77,15 @@ func (osc *OSC) Receive(ctx context.Context, wait time.Duration) (Message, error
 		msg Message
 	)
 
-	ctx, done := context.WithTimeout(ctx, wait)
+	gctx, done := context.WithTimeout(ctx, wait)
 
 	// the ctx here will be use for later
 	var eg *errgroup.Group
-	eg, ctx = errgroup.WithContext(ctx)
+	eg, ctx = errgroup.WithContext(gctx)
 	defer done()
 	_ = ctx
 
-	byt := make([]byte, 8192)
+	byt := make([]byte, 2048)
 
 	osc.Debug("Waiting for Reply...")
 
@@ -84,27 +93,39 @@ func (osc *OSC) Receive(ctx context.Context, wait time.Duration) (Message, error
 
 	eg.Go(func() error {
 		// Read into msg.Packet
+		fmt.Println("before read")
 		if _, err := osc.Conn.Read(byt); err != nil {
-			return err
+			if err != io.EOF {
+				return fmt.Errorf("read: %w", err)
+			}
 		}
+		fmt.Println("after read")
 		return nil
 	})
 
 	if _, err := msg.Packet.Write(byt); err != nil {
-		return msg, err
+		if err != io.EOF {
+			return msg, fmt.Errorf("write: %w", err)
+		}
 	}
-
-	return msg, eg.Wait()
+	if err := eg.Wait(); err != nil {
+		return msg, fmt.Errorf("wait: %v", err)
+	}
+	fmt.Println("byt", string(byt))
+	return msg, nil
 }
 
 func (osc *OSC) Listen(ctx context.Context, wait time.Duration) (Message, error) {
 
 	msg, err := osc.Receive(ctx, wait)
 	if err != nil {
-		return msg, err
+		return msg, fmt.Errorf("receive: %w", err)
 	}
 
 	err = msg.ParseMessage()
+	if err != nil {
+		return msg, fmt.Errorf("parse msg: %w", err)
+	}
 	return msg, err
 }
 

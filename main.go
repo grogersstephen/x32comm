@@ -26,6 +26,8 @@ const (
 
 var x *x32
 
+var logLevel = &slog.LevelVar{}
+
 type x32 struct {
 	osc.OSC
 }
@@ -55,17 +57,24 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	sig := make(chan os.Signal, 1)
+	defer close(sig)
 	go func() {
 		defer cancel()
-		sig := make(chan os.Signal, 1)
-		defer close(sig)
 		signal.Notify(sig, os.Interrupt)
 		<-sig
 	}()
 
 	before := func(c *cli.Context) (err error) {
-		logr := slog.New(slog.NewTextHandler(os.Stdout, nil))
-		x := &x32{
+
+		logLevel.Set(slog.LevelDebug)
+
+		slogOpts := &slog.HandlerOptions{
+			Level: logLevel,
+		}
+
+		logr := slog.New(slog.NewTextHandler(os.Stdout, slogOpts))
+		x = &x32{
 			OSC: osc.OSC{
 				Debugger: logr.With("entity", "osc"),
 			},
@@ -93,10 +102,12 @@ func main() {
 		}
 
 		go func() {
+			// read from channel and close conn; this channel should be the ctx canceled from signals channel
 			for range c.Done() {
 				x.Conn.Close()
 			}
 		}()
+
 		return nil
 	}
 
@@ -106,10 +117,18 @@ func main() {
 	var fadeDuration time.Duration
 
 	app := &cli.App{
-		Name:   "x32 comm",
-		Usage:  "communicates via osc with x32",
-		Before: before,
-		Flags:  beforeFlags,
+		Name:  "x32 comm",
+		Usage: "communicates via osc with x32",
+		Before: func(ctx *cli.Context) error {
+
+			err := before(ctx)
+			if err != nil {
+				fmt.Println("before err", err)
+				return err
+			}
+			return nil
+		},
+		Flags: beforeFlags,
 		Commands: []*cli.Command{
 			{
 				Name:  "set",
@@ -191,7 +210,7 @@ func main() {
 					}
 					fader, err := x.getChFader(channelI)
 					if err != nil {
-						return err
+						return fmt.Errorf("get ch fader: %v", err)
 					}
 					fmt.Printf("%v", fader)
 					fmt.Fprint(os.Stderr, "\n")
@@ -320,21 +339,21 @@ func (x *x32) listen(ctx context.Context, wait time.Duration) (any, error) {
 func (x *x32) sendAndListen(message string, wait time.Duration) (any, error) {
 	err := x.SendString(message)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("send string: %w", err)
 	}
 	out, err := x.listen(context.Background(), wait)
+	if err != nil {
+		return nil, fmt.Errorf("listen: %w", err)
+	}
 	return out, err
 }
 
 func (x *x32) getChFader(ch int) (float32, error) {
-	chS := fmt.Sprintf("%02d", ch)
-	if ch < 10 {
-		chS = "0" + chS
-	}
-	msg := filepath.Join("/ch/", chS, "/mix/fader")
+	msg := getFaderPath(ch)
+
 	out, err := x.sendAndListen(msg, time.Second*9)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("send and listen: %w", err)
 	}
 	fader, ok := out.(float32)
 	if !ok {
@@ -344,23 +363,21 @@ func (x *x32) getChFader(ch int) (float32, error) {
 }
 
 func (x *x32) setChFader(ch int, level float32) error {
-	chS := fmt.Sprintf("%d", ch)
-	if ch < 10 {
-		chS = "0" + chS
-	}
-	msg := filepath.Join("/ch/", chS, "/mix/fader")
+
+	msg := getFaderPath(ch)
 	err := x.compose(msg, level)
 	return err
 }
 
 func (x *x32) compose(message string, arg ...any) error {
 	// Only allows for one argument
+
 	msg := x.NewMessage(message)
 	err := msg.Add(arg[0])
 	if err != nil {
 		return err
 	}
-	err = x.Send(*msg)
+	err = x.Send(msg)
 	return err
 }
 

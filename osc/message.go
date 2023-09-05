@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 )
@@ -16,6 +17,10 @@ type Message struct {
 	Tags     string
 	Args     []data
 	debugger Debugger
+}
+
+func (m *Message) Bytes() []byte {
+	return m.Packet.Bytes()
 }
 
 func (d *data) Int32() int32 {
@@ -78,18 +83,21 @@ func (msg *Message) Debug(m string, args ...any) {
 	}
 }
 
-func (msg *Message) MakePacket() error {
+func (msg *Message) MakePacket() ([]byte, error) {
 	var n int
 	var err error
+	if msg.Packet.Len() != 0 {
+		return nil, errors.New("all ready started?")
+	}
 	// Get the address in bytes and pad with zeros
 	addrBytes := []byte(msg.Addr)
 	addZeros(&addrBytes)
 	n, err = msg.Packet.Write(addrBytes)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if n == 0 {
-		return errors.New("could not write AddrBytes")
+		return nil, errors.New("could not write AddrBytes")
 	}
 
 	// Get the tags in bytes, prefix with comma, and pad with zeros
@@ -97,24 +105,24 @@ func (msg *Message) MakePacket() error {
 	addZeros(&tagBytes)
 	n, err = msg.Packet.Write(tagBytes)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if n == 0 {
-		return errors.New("could not write TagBytes")
+		return nil, errors.New("could not write TagBytes")
 	}
 
 	// The msg.Args is already padded with proper count of zeros
 	for _, arg := range msg.Args { // for []data in Args
 		n, err = msg.Packet.Write([]byte(arg))
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if n == 0 {
-			return errors.New("could not write ArgBytes")
+			return nil, errors.New("could not write ArgBytes")
 		}
 	}
 
-	return nil
+	return msg.Bytes(), nil
 }
 
 func (msg *Message) Add(l any) error {
@@ -180,15 +188,14 @@ func (msg *Message) ParseMessage() error {
 
 	// If there is no data in the packet bytes buffer, return err
 	if msg.Packet.Len() == 0 {
-		err = errors.New("received empty packet")
-		return err
+		return errors.New("received empty packet")
 	}
 
 	// The OSC Address is the portion before the ','
 	//     Write string bytes to msg.Addr until we hit the ','
 	msg.Addr, err = msg.Packet.ReadString(',')
 	if err != nil {
-		return err
+		return fmt.Errorf("packet read string: %w", err)
 	}
 	// Trim off the comma we just wrote to msg.Addr
 	msg.Addr = strings.TrimSuffix(msg.Addr, ",")
@@ -231,7 +238,8 @@ func (msg *Message) ParseMessage() error {
 			// Read until hit a zero byte
 			msg.Args[tagIndex], err = msg.Packet.ReadBytes(0)
 			if err != nil {
-				return err
+				return fmt.Errorf("packet read bytes: %w", err)
+
 			}
 			// Trim off the zero byte just written
 			msg.Args[tagIndex] = bytes.TrimSuffix(msg.Args[tagIndex], []byte{0})
@@ -243,7 +251,7 @@ func (msg *Message) ParseMessage() error {
 			ibuf := make([]byte, 4)
 			n, err := msg.Packet.Read(ibuf)
 			if err != nil {
-				return err
+				return fmt.Errorf("packet read: %w", err)
 			}
 			if n != 4 {
 				return errors.New("didn't read all 32 bits")
@@ -251,9 +259,7 @@ func (msg *Message) ParseMessage() error {
 			msg.Args[tagIndex] = ibuf
 		}
 		if tag == 'b' {
-			err = errors.New(
-				"dontains a blob\nNot yet sure how to parse")
-			return err
+			return errors.New("contains a blob")
 		}
 	}
 
