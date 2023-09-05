@@ -27,7 +27,7 @@ func (msg *Message) PrintData() {
 	}
 	// write to a buffer and dump it to th log
 	var buf bytes.Buffer
-	buf.WriteString("Data Bytes: { ")
+	buf.WriteString("{")
 	for _, arg := range msg.Args {
 		for _, b := range arg {
 			if b == 0 {
@@ -37,7 +37,8 @@ func (msg *Message) PrintData() {
 			buf.WriteString(fmt.Sprintf("%v", b))
 		}
 	}
-	buf.WriteString("}\n")
+	buf.WriteString("}")
+	msg.Debug("PrintData", "dataBytes", buf.String())
 	printPacket(msg.Packet.Bytes())
 }
 

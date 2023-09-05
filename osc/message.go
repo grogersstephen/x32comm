@@ -209,7 +209,7 @@ func (msg *Message) ParseMessage() error {
 	}
 
 	// Trim off the zero byte we just wrote to msg.Tags
-	msg.Tags = strings.TrimSuffix(msg.Tags, "0")
+	msg.Tags = strings.TrimSuffix(msg.Tags, string(rune(0)))
 	// Unread that zero byte
 	msg.Packet.UnreadByte()
 

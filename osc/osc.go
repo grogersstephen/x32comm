@@ -80,6 +80,8 @@ func (osc *OSC) Receive(ctx context.Context, wait time.Duration) (Message, error
 
 	osc.Debug("Waiting for Reply...")
 
+	// pw, pr := io.Pipe()
+
 	eg.Go(func() error {
 		// Read into msg.Packet
 		if _, err := osc.Conn.Read(byt); err != nil {
