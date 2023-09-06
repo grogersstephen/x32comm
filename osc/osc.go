@@ -1,26 +1,63 @@
 package osc
 
 import (
+	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"os"
-	"sync"
+	"path/filepath"
 	"time"
+
+	"github.com/grogersstephen/x32comm/internal/conman"
+	"golang.org/x/sync/errgroup"
 )
+
+type Debugger interface {
+	Debug(msg string, args ...any)
+}
 
 type OSC struct {
 	Destination *net.UDPAddr
 	Client      *net.UDPAddr
-	Conn        *net.UDPConn
+	Conn        io.ReadWriteCloser
+	Debugger    Debugger
+}
+
+func (osc *OSC) Debug(msg string, args ...any) {
+	if osc.Debugger != nil {
+		osc.Debugger.Debug(msg, args...)
+	}
 }
 
 func (osc *OSC) Dial() error {
-	var err error
-	fmt.Fprintf(os.Stderr, "osc.Destination: %v:%v\n", osc.Destination.IP, osc.Destination.Port)
-	osc.Conn, err = net.DialUDP("udp", osc.Client, osc.Destination)
-	fmt.Fprintf(os.Stderr, "osc.Conn local addr: %s\n", osc.Conn.LocalAddr().String())
+	conn, err := net.DialUDP("udp", osc.Client, osc.Destination)
+	osc.Debug("osc.Destination", "host", osc.Destination.IP, "port", osc.Destination.Port)
+	osc.Debug("osc.Conn", "local", conn.LocalAddr().String())
+
+	if err != nil {
+		return err
+	}
+
+	tmp := os.TempDir()
+	ts := time.Now()
+	fp := filepath.Join(tmp, fmt.Sprintf("x32_conman_%d.txt", ts.Unix()))
+
+	// if err := os.Mkdir(fp, 0750); err != nil {
+	// 	return fmt.Errorf("mkdir; %s: %w", fp, err)
+	// }
+
+	cm, err := conman.NewConman(conman.WithRef(conn), conman.WithStructuredDrains(fp))
+	if err != nil {
+		return fmt.Errorf("new conman: %w", err)
+	}
+
+	osc.Debug("copied reads and writes", "fp", fp)
+
+	osc.Conn = cm
 	return err
 }
 
@@ -35,61 +72,91 @@ func (osc *OSC) SendString(s string) error {
 	}
 	// Write the bytes to the connection
 	_, err := osc.Conn.Write(byt)
-	return err
-}
-
-func (osc *OSC) Send(msg Message) error {
-	if msg.Packet.Len() == 0 {
-		err := msg.MakePacket()
-		if err != nil {
+	if err != nil {
+		if !errors.Is(err, io.EOF) {
 			return err
 		}
 	}
+	return nil
+}
+
+func (osc *OSC) Send(msg interface {
+	MakePacket() ([]byte, error)
+}) error {
+	b, err := msg.MakePacket()
+	if err != nil {
+		return err
+	}
+
 	// Sends a message using the Conn from net.DialUDP
-	_, err := osc.Conn.Write(msg.Packet.Bytes())
+	_, err = osc.Conn.Write(b)
 	return err
 }
 
-func (osc *OSC) Receive(wait time.Duration) (Message, error) {
+func (osc *OSC) Receive(ctx context.Context, wait time.Duration) (Message, error) {
 	// Waits for and reads a message from Conn from net.DialUDP
-	//    wait is wait time in milliseconds
+	// wait is wait time in milliseconds
 	var (
 		msg Message
-		err error
-		wg  sync.WaitGroup
 	)
 
-	byt := make([]byte, 8192)
+	gctx, done := context.WithTimeout(ctx, wait)
+	defer done()
 
-	fmt.Fprintf(os.Stderr, "Waiting for Reply...\n")
-	wg.Add(1) // Add one count to waitgroup
-	go func(w time.Duration, e *error) {
-		// If 5 seconds pass, print to stderr, and close waitgroup
-		time.Sleep(w)
-		*e = fmt.Errorf("Couldn't receive a response")
-		wg.Done()
-	}(wait, &err)
-	go func(e *error) {
+	go func() {
+		for range ctx.Done() {
+			fmt.Println("done")
+			done()
+		}
+	}()
+
+	// the ctx here will be use for later
+	var eg *errgroup.Group
+	eg, ctx = errgroup.WithContext(gctx)
+	_ = ctx
+
+	byt := make([]byte, 2048)
+
+	osc.Debug("Waiting for Reply...")
+
+	eg.Go(func() error {
 		// Read into msg.Packet
-		//_, *e = osc.Conn.Read(msg.Packet.Bytes())
-		_, *e = osc.Conn.Read(byt)
-		wg.Done() // If read is successful, close waitgroup
-	}(&err)
-	wg.Wait()
-	wg.Add(1) // Add to the counter to guard against panicking at a negative counter
+		fmt.Println("before read")
+		if _, err := osc.Conn.Read(byt); err != nil {
+			if err != io.EOF {
+				return fmt.Errorf("read: %w", err)
+			}
+		}
+		fmt.Println("after read")
+		return nil
+	})
 
-	msg.Packet.Write(byt)
+	if err := eg.Wait(); err != nil {
+		return msg, fmt.Errorf("wait: %v", err)
+	}
+	fmt.Println("after wait")
 
-	return msg, err
+	if _, err := msg.Packet.Write(byt); err != nil {
+		if err != io.EOF {
+			return msg, fmt.Errorf("write: %w", err)
+		}
+	}
+
+	fmt.Println("byt", string(byt))
+	return msg, nil
 }
 
-func (osc *OSC) Listen(wait time.Duration) (Message, error) {
-	msg, err := osc.Receive(wait)
+func (osc *OSC) Listen(ctx context.Context, wait time.Duration) (Message, error) {
+
+	msg, err := osc.Receive(ctx, wait)
 	if err != nil {
-		return msg, err
+		return msg, fmt.Errorf("receive: %w", err)
 	}
 
 	err = msg.ParseMessage()
+	if err != nil {
+		return msg, fmt.Errorf("parse msg: %w", err)
+	}
 	return msg, err
 }
 

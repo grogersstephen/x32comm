@@ -1,42 +1,44 @@
 package osc
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
 )
 
 func (msg *Message) PrintData() {
-	fmt.Printf("Addr: %s\n", msg.Addr)
-	fmt.Printf("Tags: %s\n", msg.Tags)
+	msg.Debug("", "addr", msg.Addr)
+	msg.Debug("", "tags", msg.Tags)
 	// Iterating a string returns runes???
 	for i, tag := range msg.Tags {
 		switch tag {
 		case 'i':
-			fmt.Printf("Data Int: %v\n",
-				msg.Args[i].Int32())
+			fmt.Printf("Data Int: %v\n", msg.Args[i].Int32())
 		case 'f':
-			fmt.Printf("Data Float: %v\n",
-				msg.Args[i].Float32())
+			fmt.Printf("Data Float: %v\n", msg.Args[i].Float32())
 		case 's':
-			fmt.Printf("Data String: %v\n",
-				msg.Args[i].String())
+			fmt.Printf("Data String: %v\n", msg.Args[i].String())
 		default:
 			fmt.Fprintf(os.Stderr,
 				"%v\n",
-				fmt.Errorf("Cannot Determine Type"))
+				errors.New("cannot determine type"))
 		}
 	}
-	fmt.Printf("Data Bytes: { ")
+	// write to a buffer and dump it to th log
+	var buf bytes.Buffer
+	buf.WriteString("{")
 	for _, arg := range msg.Args {
 		for _, b := range arg {
 			if b == 0 {
-				fmt.Fprintf(os.Stdout, "~ ")
+				buf.WriteString("~ ")
 				continue
 			}
-			fmt.Fprintf(os.Stdout, "%v ", b)
+			buf.WriteString(fmt.Sprintf("%v", b))
 		}
 	}
-	fmt.Printf("}\n")
+	buf.WriteString("}")
+	msg.Debug("PrintData", "dataBytes", buf.String())
 	printPacket(msg.Packet.Bytes())
 }
 

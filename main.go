@@ -1,13 +1,18 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"time"
+
+	"log/slog"
 
 	"github.com/grogersstephen/x32comm/osc"
 	"github.com/urfave/cli/v2"
@@ -15,52 +20,124 @@ import (
 
 const (
 	// UPDATE: X32 faders apparently only have 10bit resolution
-	FADER_RESOLUTION float32 = 1024 // 10bit
+	FADER_RESOLUTION float32 = 1 << 10 // 10bit
 	//FADER_RESOLUTION float32 = 256 // 8bit
 )
 
+var x *x32
+
+var logLevel = &slog.LevelVar{}
+
 type x32 struct {
 	osc.OSC
+	ctx context.Context
+}
+
+var beforeFlags = []cli.Flag{
+	&cli.StringFlag{
+		Name:    "port",
+		Aliases: []string{"p"},
+		Value:   "10024",
+	},
+	&cli.StringFlag{
+		Name:  "dest",
+		Usage: "destination address",
+		Value: "45.56.112.149:10023",
+	},
+}
+
+func joinFlags(args ...[]cli.Flag) []cli.Flag {
+	out := []cli.Flag{}
+	for _, flags := range args {
+		out = append(out, flags...)
+	}
+	return out
 }
 
 func main() {
-	var err error
-	var x x32
+	logLevel.Set(slog.LevelDebug)
 
-	x.Destination, err = net.ResolveUDPAddr("udp", "45.56.112.149:10023")
-	if err != nil {
-		log.Fatal(err)
-	}
-	// Cannot use localhost or 127.0.0.1
-	x.Client, err = net.ResolveUDPAddr("udp", ":10024")
-	//	x.Client, err = net.ResolveUDPAddr("udp", "127.0.0.1:10024")
-	//x.Client, err = net.ResolveUDPAddr("udp", "192.168.0.173:10024")
-	//x.Client, err = net.ResolveUDPAddr("udp", "192.168.213.55:10024")
-	if err != nil {
-		log.Fatal(err)
+	slogOpts := &slog.HandlerOptions{
+		Level: logLevel,
 	}
 
-	err = x.Dial()
-	if err != nil {
-		log.Fatal(err)
-	}
+	logr := slog.New(slog.NewTextHandler(os.Stdout, slogOpts))
 
-	defer x.Conn.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	sig := make(chan os.Signal, 1)
+	defer close(sig)
+
+	go func() {
+		defer cancel()
+		signal.Notify(sig, os.Interrupt)
+		<-sig
+		logr.Info("close")
+	}()
+
+	before := func(c *cli.Context) (err error) {
+		x = &x32{
+			OSC: osc.OSC{
+				Debugger: logr.With("entity", "osc"),
+			},
+			ctx: c.Context,
+		}
+
+		dest := c.String("dest")
+
+		x.Destination, err = net.ResolveUDPAddr("udp", dest)
+		if err != nil {
+			return fmt.Errorf("resolve dest udp addr: %v", err)
+		}
+
+		logr.Info(x.Destination.String())
+
+		port := c.String("port")
+
+		x.Client, err = net.ResolveUDPAddr("udp", ":"+port)
+		if err != nil {
+			return fmt.Errorf("resolve client udp addr: %v", err)
+		}
+
+		err = x.Dial()
+		if err != nil {
+			return fmt.Errorf("dial: %v", err)
+		}
+
+		go func() {
+			// read from channel and close conn; this channel should be the ctx canceled from signals channel
+			for range c.Done() {
+				fmt.Println("done here")
+				x.Conn.Close()
+			}
+		}()
+
+		return nil
+	}
 
 	var message string
 	var floatArg float64
 	var channel, fadeStart, fadeStop int
 	var fadeDuration time.Duration
-	//var stringArg string
 
 	app := &cli.App{
 		Name:  "x32 comm",
 		Usage: "communicates via osc with x32",
+		Before: func(ctx *cli.Context) error {
+
+			err := before(ctx)
+			if err != nil {
+				fmt.Println("before err", err)
+				return err
+			}
+			return nil
+		},
+		Flags: beforeFlags,
 		Commands: []*cli.Command{
 			{
 				Name:  "set",
 				Usage: "Send a float message expecting no response",
-				Flags: []cli.Flag{
+				Flags: joinFlags(beforeFlags, []cli.Flag{
 					&cli.StringFlag{
 						Name:        "message",
 						Aliases:     []string{"m"},
@@ -73,7 +150,7 @@ func main() {
 						Destination: &floatArg,
 						Required:    false,
 					},
-				},
+				}),
 				Action: func(cCtx *cli.Context) error {
 					err := x.compose(message, floatArg)
 					return err
@@ -86,18 +163,18 @@ func main() {
 					channelS := cCtx.Args().Get(0)
 					levelS := cCtx.Args().Get(1)
 					if channelS == "" {
-						return fmt.Errorf("please select a channel 1-32")
+						return errors.New("please select a channel 1-32")
 					}
 					if levelS == "" {
-						return fmt.Errorf("please select a level 0-100")
+						return errors.New("please select a level 0-100")
 					}
 					channelI, err := strconv.Atoi(channelS)
 					if err != nil {
-						return fmt.Errorf("please select a channel 1-32")
+						return errors.New("please select a channel 1-32")
 					}
 					levelI, err := strconv.ParseFloat(levelS, 32)
 					if err != nil {
-						return fmt.Errorf("please select a level 0-100")
+						return errors.New("please select a level 0-100")
 					}
 					levelF := float32(levelI) / float32(100)
 					err = x.setChFader(channelI, levelF)
@@ -107,14 +184,14 @@ func main() {
 			{
 				Name:  "get",
 				Usage: "Send a message and await a response",
-				Flags: []cli.Flag{
+				Flags: joinFlags(beforeFlags, []cli.Flag{
 					&cli.StringFlag{
 						Name:        "message",
 						Aliases:     []string{"m"},
 						Destination: &message,
 						Required:    true,
 					},
-				},
+				}),
 				Action: func(cCtx *cli.Context) error {
 					out, err := x.sendAndListen(message, 9*time.Second)
 					if err != nil {
@@ -128,6 +205,7 @@ func main() {
 			{
 				Name:  "getChFader",
 				Usage: "Get a channel fader level",
+				Flags: joinFlags(beforeFlags),
 				Action: func(cCtx *cli.Context) error {
 					channelS := cCtx.Args().Get(0)
 					channelI, err := strconv.Atoi(channelS)
@@ -136,7 +214,7 @@ func main() {
 					}
 					fader, err := x.getChFader(channelI)
 					if err != nil {
-						return err
+						return fmt.Errorf("get ch fader: %v", err)
 					}
 					fmt.Printf("%v", fader)
 					fmt.Fprint(os.Stderr, "\n")
@@ -146,8 +224,9 @@ func main() {
 			{
 				Name:  "listen",
 				Usage: "listen for a message",
+				Flags: joinFlags(beforeFlags),
 				Action: func(cCtx *cli.Context) error {
-					out, err := x.listen(9 * time.Second)
+					out, err := x.listen(cCtx.Context, 9*time.Second)
 					if err != nil {
 						return err
 					}
@@ -159,7 +238,7 @@ func main() {
 			{
 				Name:  "fadeTo",
 				Usage: "fade a channel to a specified level from its current level ",
-				Flags: []cli.Flag{
+				Flags: joinFlags(beforeFlags, []cli.Flag{
 					&cli.IntFlag{
 						Name:        "ch",
 						Aliases:     []string{"c"},
@@ -181,7 +260,7 @@ func main() {
 						Value:       2 * time.Second,
 						Destination: &fadeDuration,
 					},
-				},
+				}),
 				Action: func(cCtx *cli.Context) error {
 					currentLevel, err := x.getChFader(channel)
 					fmt.Printf("current level: %v\n", currentLevel)
@@ -198,7 +277,7 @@ func main() {
 			{
 				Name:  "fade",
 				Usage: "fade a channel from one level to another",
-				Flags: []cli.Flag{
+				Flags: joinFlags(beforeFlags, []cli.Flag{
 					&cli.IntFlag{
 						Name:        "ch",
 						Aliases:     []string{"c"},
@@ -227,7 +306,7 @@ func main() {
 						Value:       2 * time.Second,
 						Destination: &fadeDuration,
 					},
-				},
+				}),
 				Action: func(cCtx *cli.Context) error {
 					fadeStartF := float32(fadeStart) / float32(100)
 					fadeStopF := float32(fadeStop) / float32(100)
@@ -238,14 +317,14 @@ func main() {
 		},
 	}
 
-	if err := app.Run(os.Args); err != nil {
+	if err := app.RunContext(ctx, os.Args); err != nil {
 		log.Fatal(err)
 	}
 
 }
 
-func (x *x32) listen(wait time.Duration) (any, error) {
-	msg, err := x.Listen(wait)
+func (x *x32) listen(ctx context.Context, wait time.Duration) (any, error) {
+	msg, err := x.Listen(ctx, wait)
 	if err != nil {
 		return nil, err
 	}
@@ -258,64 +337,57 @@ func (x *x32) listen(wait time.Duration) (any, error) {
 	case 'f':
 		return msg.Args[0].Float32(), nil
 	}
-	return nil, fmt.Errorf("cannot determine data type:")
+	return nil, errors.New("cannot determine data type")
 }
 
 func (x *x32) sendAndListen(message string, wait time.Duration) (any, error) {
 	err := x.SendString(message)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("send string: %w", err)
 	}
-	out, err := x.listen(wait)
+	out, err := x.listen(x.ctx, wait)
+	if err != nil {
+		return nil, fmt.Errorf("listen: %w", err)
+	}
 	return out, err
 }
 
 func (x *x32) getChFader(ch int) (float32, error) {
-	chS := fmt.Sprintf("%d", ch)
-	if ch < 10 {
-		chS = "0" + chS
-	}
-	msg := filepath.Join("/ch/", chS, "/mix/fader")
+	msg := getFaderPath(ch)
+
 	out, err := x.sendAndListen(msg, time.Second*9)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("send and listen: %w", err)
 	}
 	fader, ok := out.(float32)
-	if ok != true {
-		return 0, fmt.Errorf("not a float")
+	if !ok {
+		return 0, errors.New("not a float")
 	}
 	return fader, nil
 }
 
 func (x *x32) setChFader(ch int, level float32) error {
-	chS := fmt.Sprintf("%d", ch)
-	if ch < 10 {
-		chS = "0" + chS
-	}
-	msg := filepath.Join("/ch/", chS, "/mix/fader")
+
+	msg := getFaderPath(ch)
 	err := x.compose(msg, level)
 	return err
 }
 
 func (x *x32) compose(message string, arg ...any) error {
 	// Only allows for one argument
+
 	msg := x.NewMessage(message)
 	err := msg.Add(arg[0])
 	if err != nil {
 		return err
 	}
-	err = x.Send(*msg)
+	err = x.Send(msg)
 	return err
 }
 
 func getFaderPath(ch int) string {
-	var path, zerodigit, chS string
-	chS = fmt.Sprintf("%d", ch)
-	if len(chS) == 1 {
-		zerodigit = "0"
-	}
-	path = filepath.Join("/ch", zerodigit+chS, "mix/fader")
-	return path
+
+	return filepath.Join("/ch", fmt.Sprintf("%02d", ch), "mix/fader")
 }
 
 func getDist(x, y int) int {
