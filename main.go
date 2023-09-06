@@ -30,6 +30,7 @@ var logLevel = &slog.LevelVar{}
 
 type x32 struct {
 	osc.OSC
+	ctx context.Context
 }
 
 var beforeFlags = []cli.Flag{
@@ -66,6 +67,7 @@ func main() {
 
 	sig := make(chan os.Signal, 1)
 	defer close(sig)
+
 	go func() {
 		defer cancel()
 		signal.Notify(sig, os.Interrupt)
@@ -74,11 +76,11 @@ func main() {
 	}()
 
 	before := func(c *cli.Context) (err error) {
-
 		x = &x32{
 			OSC: osc.OSC{
 				Debugger: logr.With("entity", "osc"),
 			},
+			ctx: c.Context,
 		}
 
 		dest := c.String("dest")
@@ -105,6 +107,7 @@ func main() {
 		go func() {
 			// read from channel and close conn; this channel should be the ctx canceled from signals channel
 			for range c.Done() {
+				fmt.Println("done here")
 				x.Conn.Close()
 			}
 		}()
@@ -342,7 +345,7 @@ func (x *x32) sendAndListen(message string, wait time.Duration) (any, error) {
 	if err != nil {
 		return "", fmt.Errorf("send string: %w", err)
 	}
-	out, err := x.listen(context.Background(), wait)
+	out, err := x.listen(x.ctx, wait)
 	if err != nil {
 		return nil, fmt.Errorf("listen: %w", err)
 	}

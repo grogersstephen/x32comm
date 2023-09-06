@@ -101,18 +101,23 @@ func (osc *OSC) Receive(ctx context.Context, wait time.Duration) (Message, error
 	)
 
 	gctx, done := context.WithTimeout(ctx, wait)
+	defer done()
+
+	go func() {
+		for range ctx.Done() {
+			fmt.Println("done")
+			done()
+		}
+	}()
 
 	// the ctx here will be use for later
 	var eg *errgroup.Group
 	eg, ctx = errgroup.WithContext(gctx)
-	defer done()
 	_ = ctx
 
 	byt := make([]byte, 2048)
 
 	osc.Debug("Waiting for Reply...")
-
-	// pw, pr := io.Pipe()
 
 	eg.Go(func() error {
 		// Read into msg.Packet
@@ -129,6 +134,7 @@ func (osc *OSC) Receive(ctx context.Context, wait time.Duration) (Message, error
 	if err := eg.Wait(); err != nil {
 		return msg, fmt.Errorf("wait: %v", err)
 	}
+	fmt.Println("after wait")
 
 	if _, err := msg.Packet.Write(byt); err != nil {
 		if err != io.EOF {
