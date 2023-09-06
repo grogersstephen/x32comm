@@ -39,7 +39,7 @@ func WithDrainPath(drainPath string) Option {
 func WithStructuredDrains(drainPath string) Option {
 	return applyOptionFunc(func(c *ConMan) error {
 
-		f, err := os.Open(drainPath)
+		f, err := os.Create(drainPath)
 		if err != nil {
 			return err
 		}
@@ -58,7 +58,8 @@ type StructuredWriter struct {
 }
 
 func (sw *StructuredWriter) Write(in []byte) (int, error) {
-	sw.Info("write", "hex", hex.EncodeToString(in), "bytes", in)
+	sw.Info("write", "hex", hex.EncodeToString(in), "bytes", in, "string", string(in))
+
 	return len(in), nil
 }
 

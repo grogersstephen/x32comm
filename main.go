@@ -54,6 +54,13 @@ func joinFlags(args ...[]cli.Flag) []cli.Flag {
 }
 
 func main() {
+	logLevel.Set(slog.LevelDebug)
+
+	slogOpts := &slog.HandlerOptions{
+		Level: logLevel,
+	}
+
+	logr := slog.New(slog.NewTextHandler(os.Stdout, slogOpts))
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -63,17 +70,11 @@ func main() {
 		defer cancel()
 		signal.Notify(sig, os.Interrupt)
 		<-sig
+		logr.Info("close")
 	}()
 
 	before := func(c *cli.Context) (err error) {
 
-		logLevel.Set(slog.LevelDebug)
-
-		slogOpts := &slog.HandlerOptions{
-			Level: logLevel,
-		}
-
-		logr := slog.New(slog.NewTextHandler(os.Stdout, slogOpts))
 		x = &x32{
 			OSC: osc.OSC{
 				Debugger: logr.With("entity", "osc"),
