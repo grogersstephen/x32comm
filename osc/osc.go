@@ -45,9 +45,10 @@ func (osc *OSC) Dial() error {
 	tmp := os.TempDir()
 	ts := time.Now()
 	fp := filepath.Join(tmp, fmt.Sprintf("x32_conman_%d.txt", ts.Unix()))
-	if err := os.Mkdir(fp, 0750); err != nil {
-		return fmt.Errorf("mkdir; %s: %w", fp, err)
-	}
+
+	// if err := os.Mkdir(fp, 0750); err != nil {
+	// 	return fmt.Errorf("mkdir; %s: %w", fp, err)
+	// }
 
 	cm, err := conman.NewConman(conman.WithRef(conn), conman.WithStructuredDrains(fp))
 	if err != nil {
