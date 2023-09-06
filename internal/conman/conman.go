@@ -38,8 +38,9 @@ func (c *ConMan) Read(in []byte) (int, error) {
 	c.mux.RLock()
 	defer c.mux.RUnlock()
 
-	tee := io.TeeReader(c.ref, c.drainPath)
-	return tee.Read(in)
+	c.drainPath.Read(in)
+
+	return c.ref.Read(in)
 }
 
 func (c *ConMan) Write(in []byte) (int, error) {

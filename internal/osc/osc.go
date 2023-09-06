@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net"
 	"os"
@@ -15,6 +16,12 @@ import (
 	"github.com/grogersstephen/x32comm/internal/conman"
 	"golang.org/x/sync/errgroup"
 )
+
+type Message interface {
+	io.Writer
+	ParseMessage() error
+	MakePacket() ([]byte, error)
+}
 
 type Debugger interface {
 	Debug(msg string, args ...any)
@@ -33,14 +40,19 @@ func (osc *OSC) Debug(msg string, args ...any) {
 	}
 }
 
-func (osc *OSC) Dial() error {
+func (osc *OSC) Dial(ctx context.Context) error {
 	conn, err := net.DialUDP("udp", osc.Client, osc.Destination)
 	osc.Debug("osc.Destination", "host", osc.Destination.IP, "port", osc.Destination.Port)
 	osc.Debug("osc.Conn", "local", conn.LocalAddr().String())
-
 	if err != nil {
 		return err
 	}
+
+	go func() {
+		for range ctx.Done() {
+		}
+		conn.SetDeadline(time.Now())
+	}()
 
 	tmp := os.TempDir()
 	ts := time.Now()
@@ -80,9 +92,7 @@ func (osc *OSC) SendString(s string) error {
 	return nil
 }
 
-func (osc *OSC) Send(msg interface {
-	MakePacket() ([]byte, error)
-}) error {
+func (osc *OSC) Send(msg Message) error {
 	b, err := msg.MakePacket()
 	if err != nil {
 		return err
@@ -104,10 +114,12 @@ func (osc *OSC) Receive(ctx context.Context, wait time.Duration) (Message, error
 	defer done()
 
 	go func() {
-		for range ctx.Done() {
-			fmt.Println("done")
-			done()
+
+		for range gctx.Done() {
 		}
+		done()
+		time.Sleep(time.Second / 3)
+		log.Fatal("done")
 	}()
 
 	// the ctx here will be use for later
@@ -121,28 +133,25 @@ func (osc *OSC) Receive(ctx context.Context, wait time.Duration) (Message, error
 
 	eg.Go(func() error {
 		// Read into msg.Packet
-		fmt.Println("before read")
 		if _, err := osc.Conn.Read(byt); err != nil {
 			if err != io.EOF {
 				return fmt.Errorf("read: %w", err)
 			}
 		}
-		fmt.Println("after read")
+
 		return nil
 	})
 
 	if err := eg.Wait(); err != nil {
 		return msg, fmt.Errorf("wait: %v", err)
 	}
-	fmt.Println("after wait")
 
-	if _, err := msg.Packet.Write(byt); err != nil {
+	if _, err := msg.Write(byt); err != nil {
 		if err != io.EOF {
 			return msg, fmt.Errorf("write: %w", err)
 		}
 	}
 
-	fmt.Println("byt", string(byt))
 	return msg, nil
 }
 

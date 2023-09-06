@@ -10,11 +10,13 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	"log/slog"
 
-	"github.com/grogersstephen/x32comm/osc"
+	"github.com/grogersstephen/x32comm/internal/message"
+	"github.com/grogersstephen/x32comm/internal/osc"
 	"github.com/urfave/cli/v2"
 )
 
@@ -69,10 +71,10 @@ func main() {
 	defer close(sig)
 
 	go func() {
-		defer cancel()
-		signal.Notify(sig, os.Interrupt)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		<-sig
 		logr.Info("close")
+		cancel()
 	}()
 
 	before := func(c *cli.Context) (err error) {
@@ -94,12 +96,12 @@ func main() {
 
 		port := c.String("port")
 
-		x.Client, err = net.ResolveUDPAddr("udp", ":"+port)
+		x.Client, err = net.ResolveUDPAddr("udp", "0.0.0.0:"+port)
 		if err != nil {
 			return fmt.Errorf("resolve client udp addr: %v", err)
 		}
 
-		err = x.Dial()
+		err = x.Dial(c.Context)
 		if err != nil {
 			return fmt.Errorf("dial: %v", err)
 		}
@@ -107,9 +109,8 @@ func main() {
 		go func() {
 			// read from channel and close conn; this channel should be the ctx canceled from signals channel
 			for range c.Done() {
-				fmt.Println("done here")
-				x.Conn.Close()
 			}
+			x.Conn.Close()
 		}()
 
 		return nil
@@ -328,14 +329,18 @@ func (x *x32) listen(ctx context.Context, wait time.Duration) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	val, ok := msg.(*message.Message)
 
-	switch msg.Tags[0] {
+	if !ok {
+		return nil, errors.New("wrong message type")
+	}
+	switch val.Tags[0] {
 	case 's':
-		return msg.Args[0].String(), nil
+		return val.Args[0].String(), nil
 	case 'i':
-		return msg.Args[0].Int32(), nil
+		return val.Args[0].Int32(), nil
 	case 'f':
-		return msg.Args[0].Float32(), nil
+		return val.Args[0].Float32(), nil
 	}
 	return nil, errors.New("cannot determine data type")
 }
@@ -373,20 +378,19 @@ func (x *x32) setChFader(ch int, level float32) error {
 	return err
 }
 
-func (x *x32) compose(message string, arg ...any) error {
+func (x *x32) compose(msg string, arg ...any) error {
 	// Only allows for one argument
 
-	msg := x.NewMessage(message)
-	err := msg.Add(arg[0])
+	m := message.NewMessage(msg)
+	err := m.Add(arg[0])
 	if err != nil {
 		return err
 	}
-	err = x.Send(msg)
+	err = x.Send(m)
 	return err
 }
 
 func getFaderPath(ch int) string {
-
 	return filepath.Join("/ch", fmt.Sprintf("%02d", ch), "mix/fader")
 }
 

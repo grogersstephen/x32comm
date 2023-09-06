@@ -64,6 +64,8 @@ func (sw *StructuredWriter) Write(in []byte) (int, error) {
 }
 
 func (sw *StructuredWriter) Read(in []byte) (int, error) {
+	sw.Info("read", "hex", hex.EncodeToString(in), "bytes", in, "string", string(in))
+
 	return sw.f.Read(in)
 }
 

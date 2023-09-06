@@ -1,4 +1,4 @@
-package osc
+package message
 
 import (
 	"bytes"
@@ -10,6 +10,10 @@ import (
 )
 
 type data []byte
+
+type Debugger interface {
+	Debug(msg string, args ...any)
+}
 
 type Message struct {
 	Packet   bytes.Buffer
@@ -68,10 +72,10 @@ func addZeros(b *[]byte) {
 	}
 }
 
-func (osc *OSC) NewMessage(addr string) *Message {
+func NewMessage(addr string, opts ...Option) *Message {
 	msg := &Message{
-		Addr:     addr,
-		debugger: osc.Debugger,
+		Addr: addr,
+		// debugger: osc.Debugger,
 	}
 
 	return msg
@@ -81,6 +85,10 @@ func (msg *Message) Debug(m string, args ...any) {
 	if msg.debugger != nil {
 		msg.debugger.Debug(m, args...)
 	}
+}
+
+func (msg *Message) Write(in []byte) (int, error) {
+	return msg.Packet.Write(in)
 }
 
 func (msg *Message) MakePacket() ([]byte, error) {
