@@ -125,14 +125,16 @@ func (osc *OSC) Receive(ctx context.Context, wait time.Duration) (Message, error
 		return nil
 	})
 
+	if err := eg.Wait(); err != nil {
+		return msg, fmt.Errorf("wait: %v", err)
+	}
+
 	if _, err := msg.Packet.Write(byt); err != nil {
 		if err != io.EOF {
 			return msg, fmt.Errorf("write: %w", err)
 		}
 	}
-	if err := eg.Wait(); err != nil {
-		return msg, fmt.Errorf("wait: %v", err)
-	}
+
 	fmt.Println("byt", string(byt))
 	return msg, nil
 }
